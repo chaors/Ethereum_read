@@ -33,17 +33,25 @@ type node interface {
 	canUnload(cachegen, cachelimit uint16) bool
 }
 
+// MPT几种节点结构
 type (
+	// 分支节点，它的结构体现了原生trie的设计特点
 	fullNode struct {
+		// 17个子节点，其中16个为0x0-0xf;第17个子节点存放数据
 		Children [17]node // Actual trie node data to encode/decode (needs custom encoder)
+		// 缓存节点的Hash值，同时标记dirty值来决定节点是否必须写入数据库
 		flags    nodeFlag
 	}
+	// 扩展节点和叶子节点，它的结构体现了PatriciaTrie的设计特点
+	// 区别在于扩展节点的value指向下一个节点的hash值(hashNode)；叶子节点的value是数据的RLP编码(valueNode)
 	shortNode struct {
 		Key   []byte
 		Val   node
 		flags nodeFlag
 	}
+	//节点哈希，用于实现节点的折叠(参考MerkleTree设计特点)
 	hashNode  []byte
+	//存储数据
 	valueNode []byte
 )
 
@@ -126,7 +134,10 @@ func mustDecodeNode(hash, buf []byte, cachegen uint16) node {
 }
 
 // decodeNode parses the RLP encoding of a trie node.
+// 解析MPT节点的RLP编码。
 func decodeNode(hash, buf []byte, cachegen uint16) (node, error) {
+
+	//空节点
 	if len(buf) == 0 {
 		return nil, io.ErrUnexpectedEOF
 	}
@@ -135,6 +146,7 @@ func decodeNode(hash, buf []byte, cachegen uint16) (node, error) {
 		return nil, fmt.Errorf("decode error: %v", err)
 	}
 	switch c, _ := rlp.CountValues(elems); c {
+	// 这里根据rlpList的长度来判断节点类型，2为shortNode，17的话是fullNode
 	case 2:
 		n, err := decodeShort(hash, elems, cachegen)
 		return n, wrapError(err, "short")
@@ -146,21 +158,29 @@ func decodeNode(hash, buf []byte, cachegen uint16) (node, error) {
 	}
 }
 
+// 针对shortNode的解码方式
 func decodeShort(hash, elems []byte, cachegen uint16) (node, error) {
+
+	// kbuf -- compact key;rest -- 节点的value
 	kbuf, rest, err := rlp.SplitString(elems)
 	if err != nil {
 		return nil, err
 	}
 	flag := nodeFlag{hash: hash, gen: cachegen}
+	// 1.将key从conmpact编码转换为Hex字符串
 	key := compactToHex(kbuf)
+	// 2.根据是否包含终结符号(16--00010000)来判断是否为叶子节点
 	if hasTerm(key) {
 		// value node
+		// 包含16，是叶子节点
 		val, _, err := rlp.SplitString(rest)
 		if err != nil {
 			return nil, fmt.Errorf("invalid value node: %v", err)
 		}
 		return &shortNode{key, append(valueNode{}, val...), flag}, nil
 	}
+
+	// 3.解析剩下的节点
 	r, _, err := decodeRef(rest, cachegen)
 	if err != nil {
 		return nil, wrapError(err, "val")
@@ -168,6 +188,7 @@ func decodeShort(hash, elems []byte, cachegen uint16) (node, error) {
 	return &shortNode{key, r, flag}, nil
 }
 
+// 针对fullNode的解码方式
 func decodeFull(hash, elems []byte, cachegen uint16) (*fullNode, error) {
 	n := &fullNode{flags: nodeFlag{hash: hash, gen: cachegen}}
 	for i := 0; i < 16; i++ {
@@ -189,6 +210,7 @@ func decodeFull(hash, elems []byte, cachegen uint16) (*fullNode, error) {
 
 const hashLen = len(common.Hash{})
 
+// 解析剩余节点
 func decodeRef(buf []byte, cachegen uint16) (node, []byte, error) {
 	kind, val, rest, err := rlp.Split(buf)
 	if err != nil {
@@ -198,16 +220,20 @@ func decodeRef(buf []byte, cachegen uint16) (node, []byte, error) {
 	case kind == rlp.List:
 		// 'embedded' node reference. The encoding must be smaller
 		// than a hash in order to be valid.
+		// 根据RLP编码规则 len(buf) - len(rest)为类型加内容的长度
 		if size := len(buf) - len(rest); size > hashLen {
 			err := fmt.Errorf("oversized embedded node (size is %d bytes, want size < %d)", size, hashLen)
 			return nil, buf, err
 		}
+
+		// 递归调用decodeNode解析函数
 		n, err := decodeNode(nil, buf, cachegen)
 		return n, rest, err
 	case kind == rlp.String && len(val) == 0:
 		// empty node
 		return nil, rest, nil
 	case kind == rlp.String && len(val) == 32:
+		// 数据类型为hash值，构造一个hashNode返回
 		return append(hashNode{}, val...), rest, nil
 	default:
 		return nil, nil, fmt.Errorf("invalid RLP string size %d (want 0 or 32)", len(val))

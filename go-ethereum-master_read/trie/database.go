@@ -332,6 +332,7 @@ func (db *Database) insertPreimage(hash common.Hash, preimage []byte) {
 
 // node retrieves a cached trie node from memory, or returns nil if none can be
 // found in the memory cache.
+// 从内存中检索缓存的MPT节点，如果在内存缓存中找不到任何节点，则返回nil。
 func (db *Database) node(hash common.Hash, cachegen uint16) node {
 	// Retrieve the node from cache if available
 	db.lock.RLock()
@@ -346,6 +347,8 @@ func (db *Database) node(hash common.Hash, cachegen uint16) node {
 	if err != nil || enc == nil {
 		return nil
 	}
+
+	// 真正根据hash接触node的函数
 	return mustDecodeNode(hash[:], enc, cachegen)
 }
 

@@ -34,9 +34,13 @@ import (
 //
 // SecureTrie is not safe for concurrent use.
 type SecureTrie struct {
+	// MPT树
 	trie             Trie
+	// 缓存key经过keccak256后的哈希值
 	hashKeyBuf       [common.HashLength]byte
+	// 映射hash值和原有key的关系
 	secKeyCache      map[string][]byte
+	// self
 	secKeyCacheOwner *SecureTrie // Pointer to self, replace the key cache on mismatch
 }
 

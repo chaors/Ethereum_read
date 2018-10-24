@@ -74,12 +74,23 @@ func returnHasherToPool(h *hasher) {
 
 // hash collapses a node down into a hash node, also returning a copy of the
 // original node initialized with the computed hash to replace the original one.
+// 将节点向下折叠为hash node，同时返回用计算出的散列初始化的原始节点的副本以替换原始节点。
+/*
+	node	MPT根节点
+	db		存储的数据库
+	force	true 当节点的RLP字节长度小于32也对节点的RLP进行hash计算
+			根节点调用为true以保证对根节点进行哈希计算
+	return:
+	node	入参n经过哈希折叠后的hashNode
+	node	hashNode被赋值了的同时未被哈希折叠的入参n
+*/
 func (h *hasher) hash(n node, db *Database, force bool) (node, node, error) {
 	// If we're not storing the node, just hashing, use available cached data
 	if hash, dirty := n.cache(); hash != nil {
 		if db == nil {
 			return hash, n, nil
 		}
+		// 移除节点 当trie.cachegen-node.cachegen > cachelimit
 		if n.canUnload(h.cachegen, h.cachelimit) {
 			// Unload the node from cache. All of its subnodes will have a lower or equal
 			// cache generation number.
@@ -91,10 +102,12 @@ func (h *hasher) hash(n node, db *Database, force bool) (node, node, error) {
 		}
 	}
 	// Trie not processed yet or needs storage, walk the children
+	// 将所有子节点替换成他们的Hash
 	collapsed, cached, err := h.hashChildren(n, db)
 	if err != nil {
 		return hashNode{}, n, err
 	}
+	// 将所有节点都换算完hash的hashNode存入数据库
 	hashed, err := h.store(collapsed, db, force)
 	if err != nil {
 		return hashNode{}, n, err
@@ -121,16 +134,20 @@ func (h *hasher) hash(n node, db *Database, force bool) (node, node, error) {
 // hashChildren replaces the children of a node with their hashes if the encoded
 // size of the child is larger than a hash, returning the collapsed node as well
 // as a replacement for the original node with the child hashes cached in.
+// 把所有的子节点替换成他们的hash，可以看到cache变量接管了原来的Trie树的完整结构
+// collapsed变量把子节点替换成子节点的hash值。
 func (h *hasher) hashChildren(original node, db *Database) (node, node, error) {
 	var err error
 
 	switch n := original.(type) {
 	case *shortNode:
 		// Hash the short node's child, caching the newly hashed subtree
+		// 当前节点为叶子节点或扩展节点，将collapsed.Key从Hex编码转换为Compat编码
 		collapsed, cached := n.copy(), n.copy()
 		collapsed.Key = hexToCompact(n.Key)
 		cached.Key = common.CopyBytes(n.Key)
 
+		//循环调用hash算法将collapsed中子节点全换成子节点的hash值
 		if _, ok := n.Val.(valueNode); !ok {
 			collapsed.Val, cached.Val, err = h.hash(n.Val, db, false)
 			if err != nil {
@@ -143,6 +160,7 @@ func (h *hasher) hashChildren(original node, db *Database) (node, node, error) {
 		// Hash the full node's children, caching the newly hashed subtrees
 		collapsed, cached := n.copy(), n.copy()
 
+		// 分支节点，遍历将子节点全换成子节点的hash值
 		for i := 0; i < 16; i++ {
 			if n.Children[i] != nil {
 				collapsed.Children[i], cached.Children[i], err = h.hash(n.Children[i], db, false)
@@ -156,6 +174,7 @@ func (h *hasher) hashChildren(original node, db *Database) (node, node, error) {
 
 	default:
 		// Value and hash nodes don't have children so they're left as were
+		// 没有子节点，直接返回
 		return n, original, nil
 	}
 }
@@ -163,6 +182,7 @@ func (h *hasher) hashChildren(original node, db *Database) (node, node, error) {
 // store hashes the node n and if we have a storage layer specified, it writes
 // the key/value pair to it and tracks any node->child references as well as any
 // node->external trie references.
+// MPT节点存储
 func (h *hasher) store(n node, db *Database, force bool) (node, error) {
 	// Don't store hashes or empty nodes.
 	if _, isHash := n.(hashNode); n == nil || isHash {
@@ -170,13 +190,16 @@ func (h *hasher) store(n node, db *Database, force bool) (node, error) {
 	}
 	// Generate the RLP encoding of the node
 	h.tmp.Reset()
+	// 调用rlp.Encode方法对这个节点进行编码
 	if err := rlp.Encode(&h.tmp, n); err != nil {
 		panic("encode error: " + err.Error())
 	}
+	// 如果编码后的值 < 32 并且没有要求强制保存(根节点)，直接存储在父节点中
 	if len(h.tmp) < 32 && !force {
 		return n, nil // Nodes smaller than 32 bytes are stored inside their parent
 	}
 	// Larger nodes are replaced by their hash and stored in the database.
+	// 如果编码后的值 > 32 存储到数据库中
 	hash, _ := n.cache()
 	if hash == nil {
 		hash = h.makeHashNode(h.tmp)
@@ -187,6 +210,7 @@ func (h *hasher) store(n node, db *Database, force bool) (node, error) {
 		hash := common.BytesToHash(hash)
 
 		db.lock.Lock()
+		// 数据库存储的key为node经过RLP编码后的hash值
 		db.insert(hash, h.tmp, n)
 		db.lock.Unlock()
 
