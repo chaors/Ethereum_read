@@ -16,7 +16,9 @@
 
 ### 5.[Transaction(交易模块)](https://github.com/chaors/Ethereum_read/blob/master/Docs/0x05%20Transaction(交易模块)%20.md)
 
-### 6.还在陆续更新中....
+### 6.[MPT源码解析](https://github.com/chaors/Ethereum_read/blob/master/Docs/0x06%20MPT源码解析.md)
+
+### 7.还在陆续更新中....
 
 ### ......
 
