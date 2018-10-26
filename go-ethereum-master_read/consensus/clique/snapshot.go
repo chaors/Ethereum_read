@@ -29,30 +29,47 @@ import (
 
 // Vote represents a single vote that an authorized signer made to modify the
 // list of authorizations.
+// 授权签名者为修改授权列表而进行的单一投票
 type Vote struct {
+	// 提出投票的signer
 	Signer    common.Address `json:"signer"`    // Authorized signer that cast this vote
+	// 投票所在的区块编号
 	Block     uint64         `json:"block"`     // Block number the vote was cast in (expire old votes)
+	// 被投票更改认证状态的地址
 	Address   common.Address `json:"address"`   // Account being voted on to change its authorization
+	// 是否授权或取消对已投票帐户的授权
 	Authorize bool           `json:"authorize"` // Whether to authorize or deauthorize the voted account
 }
 
 // Tally is a simple vote tally to keep the current score of votes. Votes that
 // go against the proposal aren't counted since it's equivalent to not voting.
+// 一个简单的投票结果，以保持当前的投票得分。
 type Tally struct {
+	// 投票是关于授权新的signer还是踢掉signer
 	Authorize bool `json:"authorize"` // Whether the vote is about authorizing or kicking someone
+	// 到目前为止希望通过提案的投票数
 	Votes     int  `json:"votes"`     // Number of votes until now wanting to pass the proposal
 }
 
 // Snapshot is the state of the authorization voting at a given point in time.
+// 指定时间点的投票状态
 type Snapshot struct {
+	// clique共识配置
 	config   *params.CliqueConfig // Consensus engine parameters to fine tune behavior
+	// 最近区块签名的缓存，为了加速恢复
 	sigcache *lru.ARCCache        // Cache of recent block signatures to speed up ecrecover
 
+	// 快照建立的区块号
 	Number  uint64                      `json:"number"`  // Block number where the snapshot was created
+	// 区块hash
 	Hash    common.Hash                 `json:"hash"`    // Block hash where the snapshot was created
+	// 当下Signer的集合
 	Signers map[common.Address]struct{} `json:"signers"` // Set of authorized signers at this moment
+	// 最近签名区块地址的集合
 	Recents map[uint64]common.Address   `json:"recents"` // Set of recent signers for spam protections
+	// 按顺序排列的投票列表
 	Votes   []*Vote                     `json:"votes"`   // List of votes cast in chronological order
+	// 当前投票结果，可以避免重新计算
 	Tally   map[common.Address]Tally    `json:"tally"`   // Current vote tally to avoid recalculating
 }
 
@@ -172,35 +189,43 @@ func (s *Snapshot) uncast(address common.Address, authorize bool) bool {
 
 // apply creates a new authorization snapshot by applying the given headers to
 // the original one.
+// 根据区块头创建一个新的signer的快照
 func (s *Snapshot) apply(headers []*types.Header) (*Snapshot, error) {
 	// Allow passing in no headers for cleaner code
 	if len(headers) == 0 {
 		return s, nil
 	}
 	// Sanity check that the headers can be applied
+	// 对入参区块头做完整性检查
 	for i := 0; i < len(headers)-1; i++ {
 		if headers[i+1].Number.Uint64() != headers[i].Number.Uint64()+1 {
 			return nil, errInvalidVotingChain
 		}
 	}
+
+	// 判断区块序号是否连续
 	if headers[0].Number.Uint64() != s.Number+1 {
 		return nil, errInvalidVotingChain
 	}
 	// Iterate through the headers and create a new snapshot
+	// 遍历区块头数组并建立新的侉子好
 	snap := s.copy()
 
 	for _, header := range headers {
 		// Remove any votes on checkpoint blocks
+		// 移除检查点快照上的任何投票
 		number := header.Number.Uint64()
 		if number%s.config.Epoch == 0 {
 			snap.Votes = nil
 			snap.Tally = make(map[common.Address]Tally)
 		}
 		// Delete the oldest signer from the recent list to allow it signing again
+		// 移除投票票数过半，移除signer
 		if limit := uint64(len(snap.Signers)/2 + 1); number >= limit {
 			delete(snap.Recents, number-limit)
 		}
 		// Resolve the authorization key and check against signers
+		// 解析授权密钥并检查签名者
 		signer, err := ecrecover(header, s.sigcache)
 		if err != nil {
 			return nil, err
@@ -213,20 +238,25 @@ func (s *Snapshot) apply(headers []*types.Header) (*Snapshot, error) {
 				return nil, errUnauthorized
 			}
 		}
+		// 记录signer为该区块的签名者
 		snap.Recents[number] = signer
 
 		// Header authorized, discard any previous votes from the signer
+		// 丢弃之前的投票
 		for i, vote := range snap.Votes {
 			if vote.Signer == signer && vote.Address == header.Coinbase {
 				// Uncast the vote from the cached tally
+				// 从缓存的计数中取消投票
 				snap.uncast(vote.Address, vote.Authorize)
 
 				// Uncast the vote from the chronological list
+				// 从时间顺序列表中取消投票
 				snap.Votes = append(snap.Votes[:i], snap.Votes[i+1:]...)
 				break // only one vote allowed
 			}
 		}
 		// Tally up the new vote from the signer
+		// 从签名者那里获得新的投票
 		var authorize bool
 		switch {
 		case bytes.Equal(header.Nonce[:], nonceAuthVote):
@@ -245,17 +275,23 @@ func (s *Snapshot) apply(headers []*types.Header) (*Snapshot, error) {
 			})
 		}
 		// If the vote passed, update the list of signers
+		// 投票通过，更新signers列表
 		if tally := snap.Tally[header.Coinbase]; tally.Votes > len(snap.Signers)/2 {
+
+			// 投票是选举新signer
 			if tally.Authorize {
 				snap.Signers[header.Coinbase] = struct{}{}
 			} else {
+				// 投票是选移除signer
 				delete(snap.Signers, header.Coinbase)
 
 				// Signer list shrunk, delete any leftover recent caches
+				// 签名者列表缩小，删除任何剩余的最近缓存
 				if limit := uint64(len(snap.Signers)/2 + 1); number >= limit {
 					delete(snap.Recents, number-limit)
 				}
 				// Discard any previous votes the deauthorized signer cast
+				// 放弃任何以前的授权签名者投票
 				for i := 0; i < len(snap.Votes); i++ {
 					if snap.Votes[i].Signer == header.Coinbase {
 						// Uncast the vote from the cached tally
@@ -269,6 +305,7 @@ func (s *Snapshot) apply(headers []*types.Header) (*Snapshot, error) {
 				}
 			}
 			// Discard any previous votes around the just changed account
+			// 放弃已更改授权状态的账户之前的投票
 			for i := 0; i < len(snap.Votes); i++ {
 				if snap.Votes[i].Address == header.Coinbase {
 					snap.Votes = append(snap.Votes[:i], snap.Votes[i+1:]...)

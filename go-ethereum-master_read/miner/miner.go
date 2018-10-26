@@ -44,27 +44,37 @@ type Backend interface {
 
 // Miner creates blocks and searches for proof-of-work values.
 type Miner struct {
+	// 事件锁
 	mux *event.TypeMux
 
+	// 真正干活的人
 	worker *worker
-
+	// 矿工地址
 	coinbase common.Address
+	// 表示正在挖矿的状态
 	mining   int32
+	// Backend对象，Backend是一个自定义接口封装了所有挖矿所需方法
 	eth      Backend
+	// 共识引擎 以太坊有两种共识引擎ethash和clique
 	engine   consensus.Engine
 
+	// 是否能够开始挖矿
 	canStart    int32 // can start indicates whether we can start the mining operation
+	// 同步后是否应该开始挖矿
 	shouldStart int32 // should start indicates whether we should start after sync
 }
 
+// 创建miner对象
 func New(eth Backend, config *params.ChainConfig, mux *event.TypeMux, engine consensus.Engine) *Miner {
 	miner := &Miner{
 		eth:      eth,
 		mux:      mux,
 		engine:   engine,
+		// 创建一个worker
 		worker:   newWorker(config, engine, common.Address{}, eth, mux),
 		canStart: 1,
 	}
+	// 注册newCpuAgent对象
 	miner.Register(NewCpuAgent(eth.BlockChain(), engine))
 	go miner.update()
 
@@ -75,11 +85,16 @@ func New(eth Backend, config *params.ChainConfig, mux *event.TypeMux, engine con
 // It's entered once and as soon as `Done` or `Failed` has been broadcasted the events are unregistered and
 // the loop is exited. This to prevent a major security vuln where external parties can DOS you with blocks
 // and halt your mining operation for as long as the DOS continues.
+// update会跟踪下载程序事件。 请注意，这是一次性更新循环。
+// 一旦广播“完成”或“失败”，事件就会被取消注册并退出循环。
+// 这可以防止主要的安全漏洞，外部各方可以使用块来阻止你
+// 并且只要DOS继续就停止你的挖掘操作
 func (self *Miner) update() {
 	events := self.mux.Subscribe(downloader.StartEvent{}, downloader.DoneEvent{}, downloader.FailedEvent{})
 out:
 	for ev := range events.Chan() {
 		switch ev.Data.(type) {
+		// 下载开始
 		case downloader.StartEvent:
 			atomic.StoreInt32(&self.canStart, 0)
 			if self.Mining() {
@@ -87,12 +102,14 @@ out:
 				atomic.StoreInt32(&self.shouldStart, 1)
 				log.Info("Mining aborted due to sync")
 			}
+			// 下载完成或失败
 		case downloader.DoneEvent, downloader.FailedEvent:
 			shouldStart := atomic.LoadInt32(&self.shouldStart) == 1
 
 			atomic.StoreInt32(&self.canStart, 1)
 			atomic.StoreInt32(&self.shouldStart, 0)
 			if shouldStart {
+				// 开始挖矿
 				self.Start(self.coinbase)
 			}
 			// unsubscribe. we're only interested in this event once
@@ -114,6 +131,7 @@ func (self *Miner) Start(coinbase common.Address) {
 	atomic.StoreInt32(&self.mining, 1)
 
 	log.Info("Starting mining operation")
+	// 真正开始挖矿
 	self.worker.start()
 	self.worker.commitNewWork()
 }

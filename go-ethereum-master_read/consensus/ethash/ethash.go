@@ -197,10 +197,15 @@ func (lru *lru) get(epoch uint64) (item, future interface{}) {
 }
 
 // cache wraps an ethash cache with some metadata to allow easier concurrent use.
+// cache使用一些元数据包装ethash缓存，以便更容易并发使用。
 type cache struct {
+	// 属于哪一个epoch
 	epoch uint64    // Epoch for which this cache is relevant
+	// 该内存存储于磁盘的文件对象
 	dump  *os.File  // File descriptor of the memory mapped cache
+	// 内存映射
 	mmap  mmap.MMap // Memory map itself to unmap before releasing
+	// 实际使用的内存
 	cache []uint32  // The actual cache data content (may be memory mapped)
 	once  sync.Once // Ensures the cache is generated only once
 }
@@ -392,26 +397,39 @@ type Config struct {
 // Ethash is a consensus engine based on proof-of-work implementing the ethash
 // algorithm.
 type Ethash struct {
+
+	// ethash配置
 	config Config
 
+	// 内存缓存，可反复使用避免再生太频繁
 	caches   *lru // In memory caches to avoid regenerating too often
+	// 内存数据集
 	datasets *lru // In memory datasets to avoid regenerating too often
 
 	// Mining related fields
+	// 随机工具，用来生成种子
 	rand     *rand.Rand    // Properly seeded random source for nonces
+	// 挖矿的线程数
 	threads  int           // Number of threads to mine on if mining
+	// 挖矿通道
 	update   chan struct{} // Notification channel to update mining parameters
+	// 平均哈希率
 	hashrate metrics.Meter // Meter tracking the average hashrate
 
 	// The fields below are hooks for testing
+	// 共享pow,无法再生缓存
 	shared    *Ethash       // Shared PoW verifier to avoid cache regeneration
+	// 未通过pow的区块号，包括fakeMode
 	fakeFail  uint64        // Block number which fails PoW check even in fake mode
+	// 验证工作返回消息前的延迟时间
 	fakeDelay time.Duration // Time delay to sleep for before returning from verify
 
+	// 同步锁
 	lock sync.Mutex // Ensures thread safety for the in-memory caches and mining fields
 }
 
 // New creates a full sized ethash PoW scheme.
+// 生成ethash对象
 func New(config Config) *Ethash {
 	if config.CachesInMem <= 0 {
 		log.Warn("One ethash cache must always be in memory", "requested", config.CachesInMem)

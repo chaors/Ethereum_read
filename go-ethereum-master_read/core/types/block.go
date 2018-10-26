@@ -68,20 +68,35 @@ func (n *BlockNonce) UnmarshalText(input []byte) error {
 
 // Header represents a block header in the Ethereum blockchain.
 type Header struct {
+	// 父区块hash，即链上上一个区块的Hash
 	ParentHash  common.Hash    `json:"parentHash"       gencodec:"required"`
+	// 叔块集合uncles的RLP哈希值
 	UncleHash   common.Hash    `json:"sha3Uncles"       gencodec:"required"`
+	// 挖出区块的矿工地址
 	Coinbase    common.Address `json:"miner"            gencodec:"required"`
+	// MPT状态树根哈希
 	Root        common.Hash    `json:"stateRoot"        gencodec:"required"`
+	// 交易树根节点RLP哈希值
 	TxHash      common.Hash    `json:"transactionsRoot" gencodec:"required"`
+	// 收据树根节点RLP哈希值
 	ReceiptHash common.Hash    `json:"receiptsRoot"     gencodec:"required"`
+	// Bloom过滤器(Filter)，用来快速判断一个参数Log对象是否存在于一组已知的Log集合中
 	Bloom       Bloom          `json:"logsBloom"        gencodec:"required"`
+	// 区块难度
 	Difficulty  *big.Int       `json:"difficulty"       gencodec:"required"`
+	// 区块序号，相当于Bitcoin的Height
 	Number      *big.Int       `json:"number"           gencodec:"required"`
+	// 区块内所有Gas消耗的理论上限
 	GasLimit    uint64         `json:"gasLimit"         gencodec:"required"`
+	// 区块内所有Transaction执行时所实际消耗的Gas总和
 	GasUsed     uint64         `json:"gasUsed"          gencodec:"required"`
+	// 出块时间
 	Time        *big.Int       `json:"timestamp"        gencodec:"required"`
+	// 额外数据
 	Extra       []byte         `json:"extraData"        gencodec:"required"`
+	// 用于POW
 	MixDigest   common.Hash    `json:"mixHash"          gencodec:"required"`
+	// 用于POW 结合MixDigest生成区块哈希值
 	Nonce       BlockNonce     `json:"nonce"            gencodec:"required"`
 }
 
@@ -136,6 +151,8 @@ func rlpHash(x interface{}) (h common.Hash) {
 
 // Body is a simple (mutable, non-safe) data container for storing and moving
 // a block's data contents (transactions and uncles) together.
+// Body可以理解为Block里的数组成员集合，它相对于Header需要更多的内存空间,
+// 所以在数据传输和验证时，往往与Header是分开进行的。
 type Body struct {
 	Transactions []*Transaction
 	Uncles       []*Header
@@ -143,8 +160,11 @@ type Body struct {
 
 // Block represents an entire block in the Ethereum blockchain.
 type Block struct {
+	// 区块头
 	header       *Header
+	// 叔块的区块头
 	uncles       []*Header
+	// 交易列表
 	transactions Transactions
 
 	// caches
@@ -153,11 +173,14 @@ type Block struct {
 
 	// Td is used by package core to store the total difficulty
 	// of the chain up to and including the block.
+	// totalDifficulty 区块总难度  当前区块难度值 = td - lastBlock.td
 	td *big.Int
 
 	// These fields are used by package eth to track
 	// inter-peer block relay.
+	// 出块时间
 	ReceivedAt   time.Time
+	// 区块体
 	ReceivedFrom interface{}
 }
 

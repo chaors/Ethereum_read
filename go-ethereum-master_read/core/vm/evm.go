@@ -48,28 +48,35 @@ func run(evm *EVM, contract *Contract, input []byte) ([]byte, error) {
 			precompiles = PrecompiledContractsByzantium
 		}
 		if p := precompiles[*contract.CodeAddr]; p != nil {
+			// 运行预编译合约
 			return RunPrecompiledContract(p, input, contract)
 		}
 	}
+	// 解释器执行合约代码
 	return evm.interpreter.Run(contract, input)
 }
 
 // Context provides the EVM with auxiliary information. Once provided
 // it shouldn't be modified.
+// Context为EVM提供辅助信息。提供后，不应被修改
 type Context struct {
 	// CanTransfer returns whether the account contains
 	// sufficient ether to transfer the value
+	// 返回账户是否包含足够的用来传输的以太币
 	CanTransfer CanTransferFunc
 	// Transfer transfers ether from one account to the other
+	// 完成转账的函数 将以太从一个帐户转移到另一个帐户
 	Transfer TransferFunc
 	// GetHash returns the hash corresponding to n
 	GetHash GetHashFunc
 
 	// Message information
+	// 消息相关信息
 	Origin   common.Address // Provides information for ORIGIN
 	GasPrice *big.Int       // Provides information for GASPRICE
 
 	// Block information
+	// 区块相关信息
 	Coinbase    common.Address // Provides information for COINBASE
 	GasLimit    uint64         // Provides information for GASLIMIT
 	BlockNumber *big.Int       // Provides information for NUMBER
@@ -86,35 +93,48 @@ type Context struct {
 // sure that any errors generated are to be considered faulty code.
 //
 // The EVM should never be reused and is not thread safe.
+// // EVM是以太坊虚拟机基础对象，并提供必要的工具，以使用提供的上下文运行给定状态的合约。
+// 应该指出的是，任何调用产生的任何错误都应该被认为是一种回滚修改状态和消耗所有GAS操作，
+// 不应该执行对具体错误的检查。 解释器确保生成的任何错误都被认为是错误的代码。
 type EVM struct {
 	// Context provides auxiliary blockchain related information
+	// 辅助信息对象(包括GasPrice，GasLimit，BlockNumber等信息)
 	Context
 	// StateDB gives access to the underlying state
+	// 为EVM提供StateDB相关操作
 	StateDB StateDB
 	// Depth is the current call stack
+	// 当前调用的栈深度
 	depth int
 
 	// chainConfig contains information about the current chain
+	// 链配置信息
 	chainConfig *params.ChainConfig
 	// chain rules contains the chain rules for the current epoch
+	// 链规则
 	chainRules params.Rules
 	// virtual machine configuration options used to initialise the
 	// evm.
+	// 虚拟机配置
 	vmConfig Config
 	// global (to this context) ethereum virtual machine
 	// used throughout the execution of the tx.
+	// 解释器
 	interpreter *Interpreter
 	// abort is used to abort the EVM calling operations
 	// NOTE: must be set atomically
+	// 用于中止EVM调用操作
 	abort int32
 	// callGasTemp holds the gas available for the current call. This is needed because the
 	// available gas is calculated in gasCall* according to the 63/64 rule and later
 	// applied in opCall*.
+	// 当前call可用的gas
 	callGasTemp uint64
 }
 
 // NewEVM returns a new EVM. The returned EVM is not thread safe and should
 // only ever be used *once*.
+// 2.创建EVM对象
 func NewEVM(ctx Context, statedb StateDB, chainConfig *params.ChainConfig, vmConfig Config) *EVM {
 	evm := &EVM{
 		Context:     ctx,
@@ -124,6 +144,7 @@ func NewEVM(ctx Context, statedb StateDB, chainConfig *params.ChainConfig, vmCon
 		chainRules:  chainConfig.Rules(ctx.BlockNumber),
 	}
 
+	// 3.创建EVM解释器
 	evm.interpreter = NewInterpreter(evm, vmConfig)
 	return evm
 }
@@ -138,6 +159,7 @@ func (evm *EVM) Cancel() {
 // parameters. It also handles any necessary value transfer required and takes
 // the necessary steps to create accounts and reverses the state in case of an
 // execution error or failed value transfer.
+// 使用给定输入作为参数执行与addr关联的合约
 func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas uint64, value *big.Int) (ret []byte, leftOverGas uint64, err error) {
 	if evm.vmConfig.NoRecursion && evm.depth > 0 {
 		return nil, gas, nil
@@ -209,6 +231,7 @@ func (evm *EVM) Call(caller ContractRef, addr common.Address, input []byte, gas 
 //
 // CallCode differs from Call in the sense that it executes the given address'
 // code with the caller as context.
+//
 func (evm *EVM) CallCode(caller ContractRef, addr common.Address, input []byte, gas uint64, value *big.Int) (ret []byte, leftOverGas uint64, err error) {
 	if evm.vmConfig.NoRecursion && evm.depth > 0 {
 		return nil, gas, nil
@@ -320,37 +343,47 @@ func (evm *EVM) StaticCall(caller ContractRef, addr common.Address, input []byte
 }
 
 // Create creates a new contract using code as deployment code.
+// 创建合约
 func (evm *EVM) Create(caller ContractRef, code []byte, gas uint64, value *big.Int) (ret []byte, contractAddr common.Address, leftOverGas uint64, err error) {
 
 	// Depth check execution. Fail if we're trying to execute above the
 	// limit.
+	// 执行深度检查，如果超出设定的深度限制  创建失败
 	if evm.depth > int(params.CallCreateDepth) {
 		return nil, common.Address{}, gas, ErrDepth
 	}
+	// 账户余额不足，创建失败
 	if !evm.CanTransfer(evm.StateDB, caller.Address(), value) {
 		return nil, common.Address{}, gas, ErrInsufficientBalance
 	}
 	// Ensure there's no existing contract already at the designated address
+	// 确保指定地址没有已存在的相同合约
 	nonce := evm.StateDB.GetNonce(caller.Address())
 	evm.StateDB.SetNonce(caller.Address(), nonce+1)
 
+	// 创建合约地址
 	contractAddr = crypto.CreateAddress(caller.Address(), nonce)
 	contractHash := evm.StateDB.GetCodeHash(contractAddr)
 	if evm.StateDB.GetNonce(contractAddr) != 0 || (contractHash != (common.Hash{}) && contractHash != emptyCodeHash) {
 		return nil, common.Address{}, 0, ErrContractAddressCollision
 	}
 	// Create a new account on the state
+	// 创建数据库快照，为了迅速回滚
 	snapshot := evm.StateDB.Snapshot()
+	// 在当前状态新建合约账户
 	evm.StateDB.CreateAccount(contractAddr)
 	if evm.ChainConfig().IsEIP158(evm.BlockNumber) {
 		evm.StateDB.SetNonce(contractAddr, 1)
 	}
+	// 转账操作
 	evm.Transfer(evm.StateDB, caller.Address(), contractAddr, value)
 
 	// initialise a new contract and set the code that is to be used by the
 	// EVM. The contract is a scoped environment for this execution context
 	// only.
+	// 创建合约
 	contract := NewContract(caller, AccountRef(contractAddr), value, gas)
+	// 设置合约代码
 	contract.SetCallCode(&contractAddr, crypto.Keccak256Hash(code), code)
 
 	if evm.vmConfig.NoRecursion && evm.depth > 0 {
@@ -362,19 +395,24 @@ func (evm *EVM) Create(caller ContractRef, code []byte, gas uint64, value *big.I
 	}
 	start := time.Now()
 
+	// 执行合约的初始化
 	ret, err = run(evm, contract, nil)
 
 	// check whether the max code size has been exceeded
+	// 检查初始化生成的代码长度是否超过限制
 	maxCodeSizeExceeded := evm.ChainConfig().IsEIP158(evm.BlockNumber) && len(ret) > params.MaxCodeSize
 	// if the contract creation ran successfully and no errors were returned
 	// calculate the gas required to store the code. If the code could not
 	// be stored due to not enough gas set an error and let it be handled
 	// by the error checking condition below.
+	// 合约创建成功
 	if err == nil && !maxCodeSizeExceeded {
+		// 计算存储代码所需要的Gas
 		createDataGas := uint64(len(ret)) * params.CreateDataGas
 		if contract.UseGas(createDataGas) {
 			evm.StateDB.SetCode(contractAddr, ret)
 		} else {
+			// 当前拥有的Gas不足以存储代码
 			err = ErrCodeStoreOutOfGas
 		}
 	}
@@ -382,6 +420,7 @@ func (evm *EVM) Create(caller ContractRef, code []byte, gas uint64, value *big.I
 	// When an error was returned by the EVM or when setting the creation code
 	// above we revert to the snapshot and consume any gas remaining. Additionally
 	// when we're in homestead this also counts for code storage gas errors.
+	// 合约创建失败，借助上面创建的快照快速回滚
 	if maxCodeSizeExceeded || (err != nil && (evm.ChainConfig().IsHomestead(evm.BlockNumber) || err != ErrCodeStoreOutOfGas)) {
 		evm.StateDB.RevertToSnapshot(snapshot)
 		if err != errExecutionReverted {

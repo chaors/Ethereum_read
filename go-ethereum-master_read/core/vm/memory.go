@@ -25,7 +25,9 @@ import (
 
 // Memory implements a simple memory model for the ethereum virtual machine.
 type Memory struct {
+	// 内存
 	store       []byte
+	// 最后一次的gas花费
 	lastGasCost uint64
 }
 

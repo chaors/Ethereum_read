@@ -63,18 +63,27 @@ type Agent interface {
 // Work is the workers current environment and holds
 // all of the current state information
 type Work struct {
+	// 链的配置属性
 	config *params.ChainConfig
 	signer types.Signer
 
+	// 数据库状态
 	state     *state.StateDB // apply state changes here
+	// 祖先集，用来验证叔父块有效性
 	ancestors *set.Set       // ancestor set (used for checking uncle parent validity)
+	// 家庭集，用来验证叔块无效
 	family    *set.Set       // family set (used for checking uncle invalidity)
+	// 叔块集
 	uncles    *set.Set       // uncle set
+	// 交易量
 	tcount    int            // tx count in cycle
+	// 用于打包交易的可用天然气
 	gasPool   *core.GasPool  // available gas used to pack transactions
 
+	// 新区快
 	Block *types.Block // the new block
 
+	// 区块头
 	header   *types.Header
 	txs      []*types.Transaction
 	receipts []*types.Receipt
@@ -89,9 +98,11 @@ type Result struct {
 
 // worker is the main object which takes care of applying messages to the new state
 type worker struct {
+	// 链的配置属性
 	config *params.ChainConfig
+	// 前面提到的共识引擎
 	engine consensus.Engine
-
+	// 同步锁
 	mu sync.Mutex
 
 	// update loop
@@ -104,6 +115,7 @@ type worker struct {
 	chainSideSub event.Subscription
 	wg           sync.WaitGroup
 
+	// Agent的map集合
 	agents map[Agent]struct{}
 	recv   chan *Result
 
@@ -125,6 +137,7 @@ type worker struct {
 	uncleMu        sync.Mutex
 	possibleUncles map[common.Hash]*types.Block
 
+	// 本地挖出的有待确认的区块
 	unconfirmed *unconfirmedBlocks // set of locally mined blocks pending canonicalness confirmations
 
 	// atomic status counters
@@ -132,22 +145,31 @@ type worker struct {
 	atWork int32
 }
 
+// 为miner创建worker
 func newWorker(config *params.ChainConfig, engine consensus.Engine, coinbase common.Address, eth Backend, mux *event.TypeMux) *worker {
 	worker := &worker{
 		config:         config,
 		engine:         engine,
 		eth:            eth,
 		mux:            mux,
+		// NewTxsEvent面熟吧，前面讲交易时 TxPool会发出该事件，当一笔交易被放入到交易池
+		// 这时候如果work空闲会把Tx放到work.txs准备下一次打包进块
 		txsCh:          make(chan core.NewTxsEvent, txChanSize),
+		// ChainHeadEvent事件，表示已经有一个块作为链头 work.ipdate监听到该事件会继续挖矿
 		chainHeadCh:    make(chan core.ChainHeadEvent, chainHeadChanSize),
+		// ChainSideEvent事件，表示一个新块作为链的旁支可能会被放入possibleUncles中
 		chainSideCh:    make(chan core.ChainSideEvent, chainSideChanSize),
+		// 区块链数据库
 		chainDb:        eth.ChainDb(),
+
 		recv:           make(chan *Result, resultQueueSize),
 		chain:          eth.BlockChain(),
 		proc:           eth.BlockChain().Validator(),
+		// 可能的叔块
 		possibleUncles: make(map[common.Hash]*types.Block),
 		coinbase:       coinbase,
 		agents:         make(map[Agent]struct{}),
+		// 挖出的未被确认的区块
 		unconfirmed:    newUnconfirmedBlocks(eth.BlockChain(), miningLogAtDepth),
 	}
 	// Subscribe NewTxsEvent for tx pool
@@ -208,6 +230,7 @@ func (self *worker) start() {
 	atomic.StoreInt32(&self.mining, 1)
 
 	// spin up agents
+	// 遍历所有的agent，通知agent开始挖矿
 	for agent := range self.agents {
 		agent.Start()
 	}
@@ -310,6 +333,7 @@ func (self *worker) wait() {
 
 			// Update the block hash in all logs since it is now available and not when the
 			// receipt/log of individual transactions were created.
+			// 更新所有日志的块哈希
 			for _, r := range work.receipts {
 				for _, l := range r.Logs {
 					l.BlockHash = block.Hash()
@@ -324,18 +348,22 @@ func (self *worker) wait() {
 				continue
 			}
 			// Broadcast the block and announce chain insertion event
+			// 广播新区块并宣布链插入事件
 			self.mux.Post(core.NewMinedBlockEvent{Block: block})
 			var (
 				events []interface{}
 				logs   = work.state.Logs()
 			)
 			events = append(events, core.ChainEvent{Block: block, Hash: block.Hash(), Logs: logs})
+
 			if stat == core.CanonStatTy {
 				events = append(events, core.ChainHeadEvent{Block: block})
 			}
+
 			self.chain.PostChainEvents(events, logs)
 
 			// Insert the block into the set of pending ones to wait for confirmations
+			// 将数据插入待处理块中，等待确认
 			self.unconfirmed.Insert(block.NumberU64(), block.Hash())
 		}
 	}
@@ -386,7 +414,10 @@ func (self *worker) makeCurrent(parent *types.Block, header *types.Header) error
 	return nil
 }
 
+// 完成待挖掘区块的数据组装
 func (self *worker) commitNewWork() {
+
+	// 相关锁设置
 	self.mu.Lock()
 	defer self.mu.Unlock()
 	self.uncleMu.Lock()
@@ -402,12 +433,14 @@ func (self *worker) commitNewWork() {
 		tstamp = parent.Time().Int64() + 1
 	}
 	// this will ensure we're not going off too far in the future
+	// 确保新区块的产生不会花费太多时间
 	if now := time.Now().Unix(); tstamp > now+1 {
 		wait := time.Duration(tstamp-now) * time.Second
 		log.Info("Mining too far in the future", "wait", common.PrettyDuration(wait))
 		time.Sleep(wait)
 	}
 
+	// 组装区块头信息
 	num := parent.Number()
 	header := &types.Header{
 		ParentHash: parent.Hash(),
@@ -417,20 +450,25 @@ func (self *worker) commitNewWork() {
 		Time:       big.NewInt(tstamp),
 	}
 	// Only set the coinbase if we are mining (avoid spurious block rewards)
+	// 如果正在挖掘，设置coinbase
 	if atomic.LoadInt32(&self.mining) == 1 {
 		header.Coinbase = self.coinbase
 	}
+	// 确保区块头信息准备好
 	if err := self.engine.Prepare(self.chain, header); err != nil {
 		log.Error("Failed to prepare header for mining", "err", err)
 		return
 	}
 	// If we are care about TheDAO hard-fork check whether to override the extra-data or not
+	// TheDAO硬分叉相关设置
 	if daoBlock := self.config.DAOForkBlock; daoBlock != nil {
 		// Check whether the block is among the fork extra-override range
 		limit := new(big.Int).Add(daoBlock, params.DAOForkExtraRange)
+		// 根据新区块Number判断是否受TheDAO硬分叉的影响
 		if header.Number.Cmp(daoBlock) >= 0 && header.Number.Cmp(limit) < 0 {
 			// Depending whether we support or oppose the fork, override differently
 			if self.config.DAOForkSupport {
+				// 支持TheDAO硬分叉
 				header.Extra = common.CopyBytes(params.DAOForkBlockExtra)
 			} else if bytes.Equal(header.Extra, params.DAOForkBlockExtra) {
 				header.Extra = []byte{} // If miner opposes, don't let it use the reserved extra-data
@@ -444,19 +482,25 @@ func (self *worker) commitNewWork() {
 		return
 	}
 	// Create the current work task and check any fork transitions needed
+	// 创建当前所需的工作环境work
 	work := self.current
+	// 给work设置相关硬分叉设置
 	if self.config.DAOForkSupport && self.config.DAOForkBlock != nil && self.config.DAOForkBlock.Cmp(header.Number) == 0 {
 		misc.ApplyDAOHardFork(work.state)
 	}
+	// 准备新区块的交易列表
 	pending, err := self.eth.TxPool().Pending()
 	if err != nil {
 		log.Error("Failed to fetch pending transactions", "err", err)
 		return
 	}
+	// 交易按价格和nonce值排序
 	txs := types.NewTransactionsByPriceAndNonce(self.current.signer, pending)
+	// 提交交易
 	work.commitTransactions(self.mux, txs, self.chain, self.coinbase)
 
 	// compute uncles for the new block.
+	// 为新的区块计算叔块
 	var (
 		uncles    []*types.Header
 		badUncles []common.Hash
@@ -479,6 +523,7 @@ func (self *worker) commitNewWork() {
 		delete(self.possibleUncles, hash)
 	}
 	// Create the new block to seal with the consensus engine
+	// 使用共识引擎对新区块进行赋值，包括Header.Root, TxHash, ReceiptHash, UncleHash几个属性
 	if work.Block, err = self.engine.Finalize(self.chain, header, work.state, work.txs, uncles, work.receipts); err != nil {
 		log.Error("Failed to finalize block for sealing", "err", err)
 		return
@@ -488,6 +533,7 @@ func (self *worker) commitNewWork() {
 		log.Info("Commit new mining work", "number", work.Block.Number(), "txs", work.tcount, "uncles", len(uncles), "elapsed", common.PrettyDuration(time.Since(tstart)))
 		self.unconfirmed.Shift(work.Block.NumberU64() - 1)
 	}
+	// 加载工作环境
 	self.push(work)
 	self.updateSnapshot()
 }

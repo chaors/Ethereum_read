@@ -26,16 +26,22 @@ import (
 )
 
 type CpuAgent struct {
+	// 同步锁
 	mu sync.Mutex
 
+	// work通道
 	workCh        chan *Work
+	// 结构体通道对象
 	stop          chan struct{}
 	quitCurrentOp chan struct{}
+	// Result指针通道
 	returnCh      chan<- *Result
 
+	// 共识引擎
 	chain  consensus.ChainReader
 	engine consensus.Engine
 
+	// 当前agent是否在挖矿
 	isMining int32 // isMining indicates whether the agent is currently mining
 }
 
@@ -79,6 +85,7 @@ func (self *CpuAgent) update() {
 out:
 	for {
 		select {
+		// 检测是否有工作信号进入
 		case work := <-self.workCh:
 			self.mu.Lock()
 			if self.quitCurrentOp != nil {
@@ -87,6 +94,7 @@ out:
 			self.quitCurrentOp = make(chan struct{})
 			go self.mine(work, self.quitCurrentOp)
 			self.mu.Unlock()
+			// 监测停止信号
 		case <-self.stop:
 			self.mu.Lock()
 			if self.quitCurrentOp != nil {
@@ -100,6 +108,8 @@ out:
 }
 
 func (self *CpuAgent) mine(work *Work, stop <-chan struct{}) {
+
+	// 通过共识引擎算法来挖矿
 	if result, err := self.engine.Seal(self.chain, work.Block, stop); result != nil {
 		log.Info("Successfully sealed new block", "number", result.Number(), "hash", result.Hash())
 		self.returnCh <- &Result{work, result}

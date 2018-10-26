@@ -227,11 +227,13 @@ func prepare(dest []uint32, src []byte) {
 // a non-associative substitute for XOR. Note that we multiply the prime with
 // the full 32-bit input, in contrast with the FNV-1 spec which multiplies the
 // prime with one byte (octet) in turn.
+// fnv算法
 func fnv(a, b uint32) uint32 {
 	return a*0x01000193 ^ b
 }
 
 // fnvHash mixes in data into mix using the ethash fnv method.
+// fnv哈希算法
 func fnvHash(mix []uint32, data []uint32) {
 	for i := 0; i < len(mix); i++ {
 		mix[i] = mix[i]*0x01000193 ^ data[i]
@@ -340,24 +342,32 @@ func generateDataset(dest []uint32, epoch uint64, cache []uint32) {
 
 // hashimoto aggregates data from the full dataset in order to produce our final
 // value for a particular header hash and nonce.
+// 在传入的数据集中通过hash和nonce值计算加密值
 func hashimoto(hash []byte, nonce uint64, size uint64, lookup func(index uint32) []uint32) ([]byte, []byte) {
 	// Calculate the number of theoretical rows (we use one buffer nonetheless)
+	// 计算数据集理论的行数
 	rows := uint32(size / mixBytes)
 
 	// Combine header+nonce into a 64 byte seed
+	// 合并header和nonce到一个40bytes的seed
 	seed := make([]byte, 40)
 	copy(seed, hash)
 	binary.LittleEndian.PutUint64(seed[32:], nonce)
 
+	// 将seed进行Keccak512加密
 	seed = crypto.Keccak512(seed)
+	// 从seed中获取区块头
 	seedHead := binary.LittleEndian.Uint32(seed)
 
 	// Start the mix with replicated seed
+	// 开始与重复seed的混合 mixBytes/4 = 128/4=32
+	// 长度32，元素uint32 mix占4*32=128bytes
 	mix := make([]uint32, mixBytes/4)
 	for i := 0; i < len(mix); i++ {
 		mix[i] = binary.LittleEndian.Uint32(seed[i%16*4:])
 	}
 	// Mix in random dataset nodes
+	// 定义一个temp，与mix结构相同，长度相同
 	temp := make([]uint32, len(mix))
 
 	for i := 0; i < loopAccesses; i++ {
@@ -365,14 +375,18 @@ func hashimoto(hash []byte, nonce uint64, size uint64, lookup func(index uint32)
 		for j := uint32(0); j < mixBytes/hashBytes; j++ {
 			copy(temp[j*hashWords:], lookup(2*parent+j))
 		}
+		// 将mix中所有元素都与temp中对应位置的元素进行FNV hash运算
 		fnvHash(mix, temp)
 	}
 	// Compress mix
+	// 对Mix进行混淆
 	for i := 0; i < len(mix); i += 4 {
 		mix[i/4] = fnv(fnv(fnv(mix[i], mix[i+1]), mix[i+2]), mix[i+3])
 	}
+	// 保留32个字节有效数据
 	mix = mix[:len(mix)/4]
 
+	// 将长度为8的mix分散到32位的digest中去
 	digest := make([]byte, common.HashLength)
 	for i, val := range mix {
 		binary.LittleEndian.PutUint32(digest[i*4:], val)
@@ -401,11 +415,15 @@ func hashimotoLight(size uint64, cache []uint32, hash []byte, nonce uint64) ([]b
 // hashimotoFull aggregates data from the full dataset (using the full in-memory
 // dataset) in order to produce our final value for a particular header hash and
 // nonce.
+// 在传入的数据集中通过hash和nonce值计算加密值
 func hashimotoFull(dataset []uint32, hash []byte, nonce uint64) ([]byte, []byte) {
+	// 定义一个lookup函数，用于在数据集中查找数据
 	lookup := func(index uint32) []uint32 {
 		offset := index * hashWords
 		return dataset[offset : offset+hashWords]
 	}
+
+	// 将原始数据集进行了读取分割，然后传给hashimoto函数
 	return hashimoto(hash, nonce, uint64(len(dataset))*4, lookup)
 }
 

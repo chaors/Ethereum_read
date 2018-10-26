@@ -194,17 +194,26 @@ func ecrecover(header *types.Header, sigcache *lru.ARCCache) (common.Address, er
 
 // Clique is the proof-of-authority consensus engine proposed to support the
 // Ethereum testnet following the Ropsten attacks.
+// Clique是在Ropsten攻击之后支持Ethereum testnet的权威证明共识引擎
 type Clique struct {
+	// 共识引擎配置
 	config *params.CliqueConfig // Consensus engine configuration parameters
+	// 用于存取检索点快照的数据库
 	db     ethdb.Database       // Database to store and retrieve snapshot checkpoints
 
+	// 最近区块的快照，用于加速快照重组
 	recents    *lru.ARCCache // Snapshots for recent block to speed up reorgs
+	// 最近区块的签名，用于加速挖矿
 	signatures *lru.ARCCache // Signatures of recent blocks to speed up mining
 
+	// 当前提出的proposals列表
 	proposals map[common.Address]bool // Current list of proposals we are pushing
 
+	// signer地址
 	signer common.Address // Ethereum address of the signing key
+	// 签名函数
 	signFn SignerFn       // Signer function to authorize hashes with
+	// 读写锁
 	lock   sync.RWMutex   // Protects the signer fields
 }
 
@@ -368,20 +377,27 @@ func (c *Clique) verifyCascadingFields(chain consensus.ChainReader, header *type
 }
 
 // snapshot retrieves the authorization snapshot at a given point in time.
+// 获取投票状态快照
 func (c *Clique) snapshot(chain consensus.ChainReader, number uint64, hash common.Hash, parents []*types.Header) (*Snapshot, error) {
 	// Search for a snapshot in memory or on disk for checkpoints
+	// 在内存或磁盘上检索一个快照以检查检查点
 	var (
+		// 区块头
 		headers []*types.Header
+		// 快照对象
 		snap    *Snapshot
 	)
 	for snap == nil {
 		// If an in-memory snapshot was found, use that
+		// 如果一个内存里的快照被找到
 		if s, ok := c.recents.Get(hash); ok {
 			snap = s.(*Snapshot)
 			break
 		}
 		// If an on-disk checkpoint snapshot can be found, use that
+		// 如果一个磁盘检查点的快照被找到
 		if number%checkpointInterval == 0 {
+			// 从数据库中加载一个快照
 			if s, err := loadSnapshot(c.config, c.signatures, c.db, hash); err == nil {
 				log.Trace("Loaded voting snapshot from disk", "number", number, "hash", hash)
 				snap = s
@@ -389,6 +405,7 @@ func (c *Clique) snapshot(chain consensus.ChainReader, number uint64, hash commo
 			}
 		}
 		// If we're at block zero, make a snapshot
+		// 处于创世区块，创建一个快照
 		if number == 0 {
 			genesis := chain.GetHeaderByNumber(0)
 			if err := c.VerifyHeader(chain, genesis, false); err != nil {
@@ -398,6 +415,7 @@ func (c *Clique) snapshot(chain consensus.ChainReader, number uint64, hash commo
 			for i := 0; i < len(signers); i++ {
 				copy(signers[i][:], genesis.Extra[extraVanity+i*common.AddressLength:])
 			}
+			// 创建新快照
 			snap = newSnapshot(c.config, c.signatures, 0, genesis.Hash(), signers)
 			if err := snap.store(c.db); err != nil {
 				return nil, err
@@ -406,9 +424,11 @@ func (c *Clique) snapshot(chain consensus.ChainReader, number uint64, hash commo
 			break
 		}
 		// No snapshot for this header, gather the header and move backward
+		// 没有这个区块头的快照，则收集区块头并向后移动
 		var header *types.Header
 		if len(parents) > 0 {
 			// If we have explicit parents, pick from there (enforced)
+			// 如果有明确的父块，必须选出一个
 			header = parents[len(parents)-1]
 			if header.Hash() != hash || header.Number.Uint64() != number {
 				return nil, consensus.ErrUnknownAncestor
@@ -416,6 +436,7 @@ func (c *Clique) snapshot(chain consensus.ChainReader, number uint64, hash commo
 			parents = parents[:len(parents)-1]
 		} else {
 			// No explicit parents (or no more left), reach out to the database
+			// 没有明确的父块
 			header = chain.GetHeader(hash, number)
 			if header == nil {
 				return nil, consensus.ErrUnknownAncestor
@@ -425,16 +446,20 @@ func (c *Clique) snapshot(chain consensus.ChainReader, number uint64, hash commo
 		number, hash = number-1, header.ParentHash
 	}
 	// Previous snapshot found, apply any pending headers on top of it
+	// 找到之前的快照，将所有pending的区块头放在它的前面
 	for i := 0; i < len(headers)/2; i++ {
 		headers[i], headers[len(headers)-1-i] = headers[len(headers)-1-i], headers[i]
 	}
+	// 通过区块头生成新的快照
 	snap, err := snap.apply(headers)
 	if err != nil {
 		return nil, err
 	}
+	// 将当前快照区块的hash存到recents中
 	c.recents.Add(snap.Hash, snap)
 
 	// If we've generated a new checkpoint snapshot, save to disk
+	// 如果生成了一个新的检查点快照，保存到磁盘上
 	if snap.Number%checkpointInterval == 0 && len(headers) > 0 {
 		if err = snap.store(c.db); err != nil {
 			return nil, err
@@ -590,24 +615,30 @@ func (c *Clique) Authorize(signer common.Address, signFn SignerFn) {
 
 // Seal implements consensus.Engine, attempting to create a sealed block using
 // the local signing credentials.
+// 实现consensus.Engine
 func (c *Clique) Seal(chain consensus.ChainReader, block *types.Block, stop <-chan struct{}) (*types.Block, error) {
 	header := block.Header()
 
 	// Sealing the genesis block is not supported
 	number := header.Number.Uint64()
+	// 当前区块是创世区块
 	if number == 0 {
 		return nil, errUnknownBlock
 	}
 	// For 0-period chains, refuse to seal empty blocks (no reward but would spin sealing)
+	// 不支持0-period的链
 	if c.config.Period == 0 && len(block.Transactions()) == 0 {
 		return nil, errWaitTransactions
 	}
 	// Don't hold the signer fields for the entire sealing procedure
+	// 不要在整个签名过程中持有签名字段
 	c.lock.RLock()
+	// 获取signer和签名方法
 	signer, signFn := c.signer, c.signFn
 	c.lock.RUnlock()
 
 	// Bail out if we're unauthorized to sign a block
+	// 获取快照
 	snap, err := c.snapshot(chain, number-1, header.ParentHash, nil)
 	if err != nil {
 		return nil, err
@@ -616,9 +647,11 @@ func (c *Clique) Seal(chain consensus.ChainReader, block *types.Block, stop <-ch
 		return nil, errUnauthorized
 	}
 	// If we're amongst the recent signers, wait for the next block
+	// 如果是最近的signers中的一员，等待下一个块
 	for seen, recent := range snap.Recents {
 		if recent == signer {
 			// Signer is among recents, only wait if the current block doesn't shift it out
+			// 当前区块没有踢出Signer则继续等待
 			if limit := uint64(len(snap.Signers)/2 + 1); number < limit || seen > number-limit {
 				log.Info("Signed recently, must wait for others")
 				<-stop
@@ -627,9 +660,11 @@ func (c *Clique) Seal(chain consensus.ChainReader, block *types.Block, stop <-ch
 		}
 	}
 	// Sweet, the protocol permits us to sign the block, wait for our time
+	// 执行到这说明协议允许我们来签名这个区块
 	delay := time.Unix(header.Time.Int64(), 0).Sub(time.Now()) // nolint: gosimple
 	if header.Difficulty.Cmp(diffNoTurn) == 0 {
 		// It's not our turn explicitly to sign, delay it a bit
+		// 当前处于OUT-OF-TURN状态,随机一定时间延迟处理
 		wiggle := time.Duration(len(snap.Signers)/2+1) * wiggleTime
 		delay += time.Duration(rand.Int63n(int64(wiggle)))
 
@@ -639,16 +674,20 @@ func (c *Clique) Seal(chain consensus.ChainReader, block *types.Block, stop <-ch
 
 	select {
 	case <-stop:
+		// 停止信号
 		return nil, nil
 	case <-time.After(delay):
 	}
 	// Sign all the things!
+	// 签名工作
 	sighash, err := signFn(accounts.Account{Address: signer}, sigHash(header).Bytes())
 	if err != nil {
 		return nil, err
 	}
+	// 更新区块头的extra字段
 	copy(header.Extra[len(header.Extra)-extraSeal:], sighash)
 
+	// 通过区块头组装新区块
 	return block.WithSeal(header), nil
 }
 

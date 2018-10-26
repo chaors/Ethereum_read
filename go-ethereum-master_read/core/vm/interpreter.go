@@ -25,19 +25,25 @@ import (
 )
 
 // Config are the configuration options for the Interpreter
+// 解释器配置类
 type Config struct {
 	// Debug enabled debugging Interpreter options
+	// 启用调试
 	Debug bool
 	// Tracer is the op code logger
+	// 操作码记录器
 	Tracer Tracer
 	// NoRecursion disabled Interpreter call, callcode,
 	// delegate call and create.
+	// 禁用解释器调用，代码库调用，委托调用
 	NoRecursion bool
 	// Enable recording of SHA3/keccak preimages
+	// 启用SHA3/keccak
 	EnablePreimageRecording bool
 	// JumpTable contains the EVM instruction table. This
 	// may be left uninitialised and will be set to the default
 	// table.
+	// 操作码opcode对应的操作表
 	JumpTable [256]operation
 }
 
@@ -45,17 +51,22 @@ type Config struct {
 // passed environment to query external sources for state information.
 // The Interpreter will run the byte code VM based on the passed
 // configuration.
+// 用来运行智能合约的字节码
 type Interpreter struct {
 	evm      *EVM
+	// 解释器配置
 	cfg      Config
+	// gas价格表，根据不同的以太坊阶段来决定
 	gasTable params.GasTable
 	intPool  *intPool
 
 	readOnly   bool   // Whether to throw on stateful modifications
+	// 最后一个call调用的返回值
 	returnData []byte // Last CALL's return data for subsequent reuse
 }
 
 // NewInterpreter returns a new instance of the Interpreter.
+// 3.创建解释器
 func NewInterpreter(evm *EVM, cfg Config) *Interpreter {
 	// We use the STOP instruction whether to see
 	// the jump table was initialised. If it was not
@@ -102,6 +113,7 @@ func (in *Interpreter) enforceRestrictions(op OpCode, operation operation, stack
 // It's important to note that any errors returned by the interpreter should be
 // considered a revert-and-consume-all-gas operation except for
 // errExecutionReverted which means revert-and-keep-gas-left.
+// 执行合约代码
 func (in *Interpreter) Run(contract *Contract, input []byte) (ret []byte, err error) {
 	if in.intPool == nil {
 		in.intPool = poolOfIntPools.get()
@@ -112,14 +124,17 @@ func (in *Interpreter) Run(contract *Contract, input []byte) (ret []byte, err er
 	}
 
 	// Increment the call depth which is restricted to 1024
+	// 调用深度递增，evm执行栈的深度不能超过1024
 	in.evm.depth++
 	defer func() { in.evm.depth-- }()
 
 	// Reset the previous call's return data. It's unimportant to preserve the old buffer
 	// as every returning call will return new data anyway.
+	// 重置上一个call的返回数据
 	in.returnData = nil
 
 	// Don't bother with the execution if there's no code.
+	// 合约代码为空
 	if len(contract.Code) == 0 {
 		return nil, nil
 	}
@@ -141,6 +156,7 @@ func (in *Interpreter) Run(contract *Contract, input []byte) (ret []byte, err er
 	contract.Input = input
 
 	// Reclaim the stack as an int pool when the execution stops
+	// 执行停止时将栈回收为int值缓存池
 	defer func() { in.intPool.put(stack.data...) }()
 
 	if in.cfg.Debug {
@@ -158,15 +174,19 @@ func (in *Interpreter) Run(contract *Contract, input []byte) (ret []byte, err er
 	// explicit STOP, RETURN or SELFDESTRUCT is executed, an error occurred during
 	// the execution of one of the operations or until the done flag is set by the
 	// parent context.
+	// 解释器主循环，循环运行直到执行显式STOP，RETURN或SELFDESTRUCT，发生错误
 	for atomic.LoadInt32(&in.evm.abort) == 0 {
 		if in.cfg.Debug {
 			// Capture pre-execution values for tracing.
+			// 捕获预执行的值进行跟踪
 			logged, pcCopy, gasCopy = false, pc, contract.Gas
 		}
 
 		// Get the operation from the jump table and validate the stack to ensure there are
 		// enough stack items available to perform the operation.
+		// 从合约的二进制数据i获取第pc个opcode操作符 opcode是以太坊虚拟机指令，一共不超过256个，正好一个byte大小能装下
 		op = contract.GetOp(pc)
+		// 从JumpTable表中查询op对应的操作
 		operation := in.cfg.JumpTable[op]
 		if !operation.valid {
 			return nil, fmt.Errorf("invalid opcode 0x%x", int(op))
@@ -175,6 +195,7 @@ func (in *Interpreter) Run(contract *Contract, input []byte) (ret []byte, err er
 			return nil, err
 		}
 		// If the operation is valid, enforce and write restrictions
+		// 操作有效，强制执行
 		if err := in.enforceRestrictions(op, operation, stack); err != nil {
 			return nil, err
 		}
@@ -182,20 +203,25 @@ func (in *Interpreter) Run(contract *Contract, input []byte) (ret []byte, err er
 		var memorySize uint64
 		// calculate the new memory size and expand the memory to fit
 		// the operation
+		// 计算新的内存大小以适应操作，必要时进行扩容
 		if operation.memorySize != nil {
+			// memSize不能大于64位
 			memSize, overflow := bigUint64(operation.memorySize(stack))
 			if overflow {
 				return nil, errGasUintOverflow
 			}
 			// memory is expanded in words of 32 bytes. Gas
 			// is also calculated in words.
+			// 扩容按32字节的字扩展
 			if memorySize, overflow = math.SafeMul(toWordSize(memSize), 32); overflow {
 				return nil, errGasUintOverflow
 			}
 		}
 		// consume the gas and return an error if not enough gas is available.
 		// cost is explicitly set so that the capture state defer method can get the proper cost
+		// 计算执行操作所需要的gas
 		cost, err = operation.gasCost(in.gasTable, in.evm, contract, stack, mem, memorySize)
+		// gas不足
 		if err != nil || !contract.UseGas(cost) {
 			return nil, ErrOutOfGas
 		}
@@ -209,14 +235,17 @@ func (in *Interpreter) Run(contract *Contract, input []byte) (ret []byte, err er
 		}
 
 		// execute the operation
+		// 执行操作
 		res, err := operation.execute(&pc, in.evm, contract, mem, stack)
 		// verifyPool is a build flag. Pool verification makes sure the integrity
 		// of the integer pool by comparing values to a default value.
+		// 验证int值缓存池
 		if verifyPool {
 			verifyIntegerPool(in.intPool)
 		}
 		// if the operation clears the return data (e.g. it has returning data)
 		// set the last return to the result of the operation.
+		// 将最后一次返回设为操作结果
 		if operation.returns {
 			in.returnData = res
 		}

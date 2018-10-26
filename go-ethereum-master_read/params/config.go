@@ -102,14 +102,22 @@ var (
 // that any network, identified by its genesis block, can have its own
 // set of configuration options.
 type ChainConfig struct {
+	// 标识当前链，主键唯一id 也用来防止replay attack重放攻击
 	ChainID *big.Int `json:"chainId"` // chainId identifies the current chain and is used for replay protection
-
+	// 以太坊发展蓝图中的一个阶段,当前阶段为Homestead
+	// 第一阶段为以太坊面世代号frontier，第二阶段为Homestead即当前阶段
+	// 第三阶段为Metropolis(大都会)，Metropolis又分为Byzantium(拜占庭硬分叉，引入新型零知识证明算法和pos共识)，
+	// 然后是constantinople(君士坦丁堡硬分叉，eth正是应用pow和pos混合链)
+	// 第四阶段为Serenity(宁静)，最终稳定版的以太坊
 	HomesteadBlock *big.Int `json:"homesteadBlock,omitempty"` // Homestead switch block (nil = no fork, 0 = already homestead)
 
+	// TheDao硬分叉切换，2017年6月18日应对DAO危机做出的调整
 	DAOForkBlock   *big.Int `json:"daoForkBlock,omitempty"`   // TheDAO hard-fork switch block (nil = no fork)
+	// 节点是否支持TheDao硬分叉
 	DAOForkSupport bool     `json:"daoForkSupport,omitempty"` // Whether the nodes supports or opposes the DAO hard-fork
 
 	// EIP150 implements the Gas price changes (https://github.com/ethereum/EIPs/issues/150)
+	// eth改善方案硬分叉  没有硬分叉的置0
 	EIP150Block *big.Int    `json:"eip150Block,omitempty"` // EIP150 HF block (nil = no fork)
 	EIP150Hash  common.Hash `json:"eip150Hash,omitempty"`  // EIP150 HF hash (needed for header only clients as only gas pricing changed)
 
@@ -133,8 +141,11 @@ func (c *EthashConfig) String() string {
 }
 
 // CliqueConfig is the consensus engine configs for proof-of-authority based sealing.
+// Clique共识引擎配置
 type CliqueConfig struct {
+	// 距离上一区块出块后的时间间隔(s)
 	Period uint64 `json:"period"` // Number of seconds between blocks to enforce
+	// 重置投票和检查点的epoch长度
 	Epoch  uint64 `json:"epoch"`  // Epoch length to reset votes and checkpoint
 }
 
