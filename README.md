@@ -28,7 +28,9 @@ go-ethereum-read：以太坊源码注释
 
 ### a.[EVM机制](https://github.com/chaors/Ethereum_read/blob/master/Docs/0xa0%20EVM%E6%9C%BA%E5%88%B6%20.md)
 
-### b.还在陆续更新中....
+### b.[p2p实现](https://github.com/chaors/Ethereum_read/blob/master/Docs/0xa1%20p2p%E5%AE%9E%E7%8E%B0.md)
+
+### c.还在陆续更新中....
 
 ### ......
 
