@@ -157,6 +157,7 @@ var (
 
 func init() {
 	// Initialize the CLI app and start Geth
+	// 初始化命令行工具CLI并启动Geth
 	app.Action = geth
 	app.HideVersion = true // we have a command to print the version
 	app.Copyright = "Copyright 2013-2018 The go-ethereum Authors"
@@ -224,6 +225,7 @@ func init() {
 		// Start system runtime metrics collection
 		go metrics.CollectProcessMetrics(3 * time.Second)
 
+		// 网络配置  是主网或者测试网
 		utils.SetupNetwork(ctx)
 		return nil
 	}
